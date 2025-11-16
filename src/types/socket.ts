@@ -27,6 +27,20 @@ enum SocketEvent {
     REQUEST_DRAWING = "request-drawing",
     SYNC_DRAWING = "sync-drawing",
     DRAWING_UPDATE = "drawing-update",
+    PASSWORD_REQUIRED = "password-required",
+    PASSWORD_INCORRECT = "password-incorrect",
+    ROOM_INFO_REQUEST = "room-info-request",
+    ROOM_INFO_RESPONSE = "room-info-response",
+    CHECK_ROOM_PASSWORD = "check-room-password",
+    PASSWORD_VALID = "password-valid",
+    ERROR = "error",
+    ROOM_CREATED = "room-created",
+    CREATE_ROOM = "create-room",
+    FILE_STRUCTURE_LOADED = "file-structure-loaded",
+    FILE_CONTENT_LOADED = "file-content-loaded",
+    LOAD_FILE_STRUCTURE = "load-file-structure",
+    LOAD_FILE_CONTENT = "load-file-content",
+    
 }
 
 interface SocketContext {

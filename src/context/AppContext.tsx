@@ -30,6 +30,8 @@ function AppContextProvider({ children }: { children: ReactNode }) {
     )
     const [drawingData, setDrawingData] = useState<DrawingData>(null)
 
+    const [roomId, setRoomId] = useState<string | null>(null)
+
     return (
         <AppContext.Provider
             value={{
@@ -43,6 +45,9 @@ function AppContextProvider({ children }: { children: ReactNode }) {
                 setActivityState,
                 drawingData,
                 setDrawingData,
+
+                roomId,
+                setRoomId,
             }}
         >
             {children}

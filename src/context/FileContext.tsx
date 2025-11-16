@@ -40,20 +40,60 @@ export const useFileSystem = (): FileContextType => {
 
 function FileContextProvider({ children }: { children: ReactNode }) {
     const { socket } = useSocket()
-    const { setUsers, drawingData } = useAppContext()
+    const { setUsers, drawingData, roomId, setRoomId } = useAppContext()
 
-    const [fileStructure, setFileStructure] =
-        useState<FileSystemItem>(initialFileStructure)
-    const initialOpenFiles = fileStructure.children
-        ? fileStructure.children
-        : []
-    const [openFiles, setOpenFiles] =
-        useState<FileSystemItem[]>(initialOpenFiles)
-    const [activeFile, setActiveFile] = useState<FileSystemItem | null>(
-        openFiles[0],
-    )
+    const [fileStructure, setFileStructure] = useState<FileSystemItem>(initialFileStructure)
+    const initialOpenFiles = fileStructure.children ? fileStructure.children : []
+    const [openFiles, setOpenFiles] = useState<FileSystemItem[]>(initialOpenFiles)
+    const [activeFile, setActiveFile] = useState<FileSystemItem | null>(openFiles[0])
+    const [loadingFiles, setLoadingFiles] = useState<Set<Id>>(new Set())
+    const [hasLoadedRoomFiles, setHasLoadedRoomFiles] = useState(false)
 
-    // Function to toggle the isOpen property of a directory (Directory Open/Close)
+    // Load room file structure when roomId is available
+    useEffect(() => {
+        if (roomId && !hasLoadedRoomFiles) {
+            console.log('Loading files for room:', roomId)
+            socket.emit(SocketEvent.LOAD_FILE_STRUCTURE, { roomId })
+            setHasLoadedRoomFiles(true)
+        }
+    }, [roomId, hasLoadedRoomFiles, socket])
+
+    // Reset room files when leaving room
+    useEffect(() => {
+        if (!roomId) {
+            console.log('Room ID cleared, resetting file structure')
+            setFileStructure(initialFileStructure)
+            setOpenFiles([])
+            setActiveFile(null)
+            setHasLoadedRoomFiles(false)
+            setLoadingFiles(new Set())
+        }
+    }, [roomId])
+
+    // Listen for room events to set roomId
+    useEffect(() => {
+        const handleJoinAccepted = (data: any) => {
+            console.log('Join accepted, setting roomId:', data.user?.roomId)
+            setRoomId(data.user?.roomId || null)
+            setHasLoadedRoomFiles(false)
+        }
+
+        const handleRoomCreated = (data: any) => {
+            console.log('Room created, setting roomId:', data.roomId)
+            setRoomId(data.roomId || null)
+            setHasLoadedRoomFiles(false)
+        }
+
+        socket.on(SocketEvent.JOIN_ACCEPTED, handleJoinAccepted)
+        socket.on(SocketEvent.ROOM_CREATED, handleRoomCreated)
+
+        return () => {
+            socket.off(SocketEvent.JOIN_ACCEPTED, handleJoinAccepted)
+            socket.off(SocketEvent.ROOM_CREATED, handleRoomCreated)
+        }
+    }, [socket, setRoomId])
+
+    // All your existing functions remain exactly the same...
     const toggleDirectory = (dirId: Id) => {
         const toggleDir = (directory: FileSystemItem): FileSystemItem => {
             if (directory.id === dirId) {
@@ -71,7 +111,6 @@ function FileContextProvider({ children }: { children: ReactNode }) {
             }
         }
 
-        // Update fileStructure with the opened directory
         setFileStructure((prevFileStructure) => toggleDir(prevFileStructure))
     }
 
@@ -112,19 +151,16 @@ function FileContextProvider({ children }: { children: ReactNode }) {
                 directory: FileSystemItem,
             ): FileSystemItem => {
                 if (directory.id === parentDirId) {
-                    // If the current directory matches the parent, add new directory to its children
                     return {
                         ...directory,
                         children: [...(directory.children || []), newDirectory],
                     }
                 } else if (directory.children) {
-                    // If it's not the parent directory, recursively update children
                     return {
                         ...directory,
                         children: directory.children.map(addDirectoryToParent),
                     }
                 } else {
-                    // Return the directory as is if it has no children
                     return directory
                 }
             }
@@ -296,14 +332,12 @@ function FileContextProvider({ children }: { children: ReactNode }) {
         const file = getFileById(fileStructure, fileId)
 
         if (file) {
-            updateFileContent(activeFile?.id || "", activeFile?.content || "") // Save the content of the previously active file
+            updateFileContent(activeFile?.id || "", activeFile?.content || "")
 
-            // Add the file to openFiles if it's not already open
             if (!openFiles.some((file) => file.id === fileId)) {
                 setOpenFiles((prevOpenFiles) => [...prevOpenFiles, file])
             }
 
-            // Update content in openFiles
             setOpenFiles((prevOpenFiles) =>
                 prevOpenFiles.map((file) => {
                     if (file.id === activeFile?.id) {
@@ -318,6 +352,14 @@ function FileContextProvider({ children }: { children: ReactNode }) {
             )
 
             setActiveFile(file)
+
+            if (file.type === 'file' && 
+                (!file.content || file.content === '') && 
+                !loadingFiles.has(fileId)) {
+                console.log('Requesting file content from server:', fileId)
+                setLoadingFiles(prev => new Set(prev).add(fileId))
+                socket.emit(SocketEvent.LOAD_FILE_CONTENT, { fileId })
+            }
         }
     }
 
@@ -630,11 +672,123 @@ function FileContextProvider({ children }: { children: ReactNode }) {
         })
     }
 
+    const handleFileStructureLoaded = useCallback(
+        ({ fileStructure: loadedStructure }: { fileStructure: FileSystemItem }) => {
+            console.log('Room file structure loaded from server:', loadedStructure)
+            
+            setFileStructure(loadedStructure)
+            
+            const initialOpenFiles = loadedStructure.children 
+                ? loadedStructure.children.filter(item => item.type === 'file')
+                : []
+            
+            setOpenFiles(initialOpenFiles)
+            
+            if (initialOpenFiles.length > 0) {
+                setActiveFile(initialOpenFiles[0])
+            } else {
+                setActiveFile(null)
+            }
+            
+            setLoadingFiles(new Set())
+        },
+        []
+    )
+
+
+    const handleLoadFileContent = useCallback(
+        ({ fileId, content }: { fileId: Id; content: string }) => {
+            console.log('File content loaded from server:', fileId, content)
+            
+            setLoadingFiles(prev => {
+                const newSet = new Set(prev)
+                newSet.delete(fileId)
+                return newSet
+            })
+            
+            const updateFileDirectly = (directory: FileSystemItem): FileSystemItem => {
+                if (directory.type === "file" && directory.id === fileId) {
+                    return {
+                        ...directory,
+                        content: content,
+                    }
+                } else if (directory.children) {
+                    return {
+                        ...directory,
+                        children: directory.children.map(updateFileDirectly),
+                    }
+                } else {
+                    return directory
+                }
+            }
+
+            setFileStructure((prevFileStructure) => updateFileDirectly(prevFileStructure))
+
+            setOpenFiles((prevOpenFiles) =>
+                prevOpenFiles.map((file) => {
+                    if (file.id === fileId) {
+                        return {
+                            ...file,
+                            content: content,
+                        }
+                    } else {
+                        return file
+                    }
+                }),
+            )
+
+            if (activeFile?.id === fileId) {
+                setActiveFile(prev => prev ? { ...prev, content } : null)
+            }
+        },
+        [activeFile?.id]
+    )
+
+    useEffect(() => {
+        return () => {
+            setLoadingFiles(new Set())
+        }
+    }, [])
+
+    // NEW: Load room file structure on component mount
+    useEffect(() => {
+        // Request room file structure when component mounts
+        socket.emit(SocketEvent.LOAD_FILE_STRUCTURE)
+
+        console.log('Requested room file structure from server')
+    }, [socket])
+
+    useEffect(() => {
+        if (roomId && !hasLoadedRoomFiles) {
+            console.log('Loading files for room:', roomId)
+            socket.emit(SocketEvent.LOAD_FILE_STRUCTURE, { roomId })
+            setHasLoadedRoomFiles(true)
+        }
+    }, [roomId, hasLoadedRoomFiles, socket])
+
+    // NEW: Clean up loading states on unmount
+    useEffect(() => {
+        return () => {
+            setLoadingFiles(new Set())
+        }
+    }, [])
+
+    useEffect(() => {
+        if (!roomId) {
+            console.log('Room ID cleared, resetting file structure')
+            setFileStructure(initialFileStructure)
+            setOpenFiles([])
+            setActiveFile(null)
+            setHasLoadedRoomFiles(false)
+            setLoadingFiles(new Set())
+        }
+    }, [roomId])
+
+    // Existing socket event handlers (keep all your existing handlers)
     const handleUserJoined = useCallback(
         ({ user }: { user: RemoteUser }) => {
             toast.success(`${user.username} joined the room`)
 
-            // Send the code and drawing data to the server
             socket.emit(SocketEvent.SYNC_FILE_STRUCTURE, {
                 fileStructure,
                 openFiles,
@@ -742,6 +896,7 @@ function FileContextProvider({ children }: { children: ReactNode }) {
         [deleteFile],
     )
 
+    // Socket event listeners
     useEffect(() => {
         socket.once(SocketEvent.SYNC_FILE_STRUCTURE, handleFileStructureSync)
         socket.on(SocketEvent.USER_JOINED, handleUserJoined)
@@ -754,6 +909,10 @@ function FileContextProvider({ children }: { children: ReactNode }) {
         socket.on(SocketEvent.FILE_RENAMED, handleFileRenamed)
         socket.on(SocketEvent.FILE_DELETED, handleFileDeleted)
 
+        // NEW: Add listeners for room file loading
+        socket.on(SocketEvent.FILE_STRUCTURE_LOADED, handleFileStructureLoaded)
+        socket.on(SocketEvent.FILE_CONTENT_LOADED, handleLoadFileContent)
+
         return () => {
             socket.off(SocketEvent.USER_JOINED)
             socket.off(SocketEvent.DIRECTORY_CREATED)
@@ -764,6 +923,10 @@ function FileContextProvider({ children }: { children: ReactNode }) {
             socket.off(SocketEvent.FILE_UPDATED)
             socket.off(SocketEvent.FILE_RENAMED)
             socket.off(SocketEvent.FILE_DELETED)
+
+            // NEW: Remove room file loading listeners
+            socket.off(SocketEvent.FILE_STRUCTURE_LOADED)
+            socket.off(SocketEvent.FILE_CONTENT_LOADED)
         }
     }, [
         handleDirCreated,
@@ -776,6 +939,8 @@ function FileContextProvider({ children }: { children: ReactNode }) {
         handleFileStructureSync,
         handleFileUpdated,
         handleUserJoined,
+        handleFileStructureLoaded,
+        handleLoadFileContent,
         socket,
     ])
 

@@ -1,4 +1,5 @@
 import axiosInstance from "@/api/pistonApi"
+import codeeditorcloudInstance from "@/api/codeeditorcloud"
 import { Language, RunContext as RunContextType } from "@/types/run"
 import langMap from "lang-map"
 import {
@@ -76,24 +77,64 @@ const RunCodeContextProvider = ({ children }: { children: ReactNode }) => {
             }
 
             setIsRunning(true)
-            const { language, version } = selectedLanguage
 
-            const response = await axiosInstance.post("/execute", {
-                language,
-                version,
-                files: [{ name: activeFile.name, content: activeFile.content }],
-                stdin: input,
-            })
-            if (response.data.run.stderr) {
-                setOutput(response.data.run.stderr)
+            // Try your backend first for Python, fallback to piston API
+            if (selectedLanguage.language === "python" || selectedLanguage.aliases.includes("py")) {
+                try {
+                    console.log("Trying code-editor-cloud for Python execution")
+                    const response = await codeeditorcloudInstance.post("/execute.php", {
+                        code: activeFile.content,
+                        language: "python",
+                        input: input
+                    })
+
+                    if (response.data.success) {
+                        setOutput(response.data.output)
+                        console.log("Successfully executed using code-editor-cloud")
+                    } else {
+                        setOutput(response.data.error || "Execution failed")
+                        console.log("code-editor-cloud returned error")
+                    }
+                } catch (cloudError: any) {
+                    console.warn("code-editor-cloud failed, falling back to piston API:", cloudError.message)
+                    
+                    // Fallback to piston API
+                    const { language, version } = selectedLanguage
+                    const response = await axiosInstance.post("/execute", {
+                        language,
+                        version,
+                        files: [{ name: activeFile.name, content: activeFile.content }],
+                        stdin: input,
+                    })
+                    
+                    if (response.data.run.stderr) {
+                        setOutput(response.data.run.stderr)
+                    } else {
+                        setOutput(response.data.run.stdout)
+                    }
+                }
             } else {
-                setOutput(response.data.run.stdout)
+                // For non-Python languages, use piston API directly
+                const { language, version } = selectedLanguage
+                const response = await axiosInstance.post("/execute", {
+                    language,
+                    version,
+                    files: [{ name: activeFile.name, content: activeFile.content }],
+                    stdin: input,
+                })
+                
+                if (response.data.run.stderr) {
+                    setOutput(response.data.run.stderr)
+                } else {
+                    setOutput(response.data.run.stdout)
+                }
             }
+
             setIsRunning(false)
             toast.dismiss()
+            toast.success("Code executed successfully")
         } catch (error: any) {
-            console.error(error.response.data)
-            console.error(error.response.data.error)
+            console.error("Execution error:", error.response?.data || error.message)
             setIsRunning(false)
             toast.dismiss()
             toast.error("Failed to run the code")
@@ -118,4 +159,3 @@ const RunCodeContextProvider = ({ children }: { children: ReactNode }) => {
 }
 
 export { RunCodeContextProvider }
-
