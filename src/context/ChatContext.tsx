@@ -38,6 +38,20 @@ function ChatContextProvider({ children }: { children: ReactNode }) {
         }
     }, [socket])
 
+    useEffect(() => {
+        if (!socket) return;
+
+        socket.emit(SocketEvent.LOAD_CHAT_HISTORY);
+
+        socket.on(SocketEvent.CHAT_HISTORY_LOADED, ({ messages }) => {
+            setMessages(messages);
+        });
+
+        return () => {
+            socket.off(SocketEvent.CHAT_HISTORY_LOADED);
+        };
+    }, [socket]);
+
     return (
         <ChatContext.Provider
             value={{
