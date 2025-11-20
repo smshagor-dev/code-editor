@@ -62,6 +62,8 @@ interface RoomInfo {
     has_password: boolean;
     created_at: string;
     user_count: number;
+    is_active: boolean;
+    is_delete: boolean;
 }
 
 const FormComponent = () => {
@@ -79,6 +81,7 @@ const FormComponent = () => {
     const [showModalPassword, setShowModalPassword] = useState(false) // For modal password visibility
     const [isAutoLoginAttempted, setIsAutoLoginAttempted] = useState(false) // Prevent multiple auto-login attempts
     const [cookieLifetime, setCookieLifetime] = useState<number | undefined>(COOKIE_CONFIG.PERSISTENT) // Cookie lifetime state
+    const [joinAttemptedRoomId, setJoinAttemptedRoomId] = useState<string | null>(null) // Track which room user tried to join
 
     const usernameRef = useRef<HTMLInputElement | null>(null)
     const passwordRef = useRef<HTMLInputElement | null>(null)
@@ -136,6 +139,7 @@ const FormComponent = () => {
         setCurrentUser({ ...currentUser, roomId: newRoomId })
         setIsCreatingRoom(true)
         setRoomInfo(null) // Clear any existing room info
+        setJoinAttemptedRoomId(null) // Reset join attempt
         toast.success("Created a new Room ID")
         usernameRef.current?.focus()
     }
@@ -144,6 +148,11 @@ const FormComponent = () => {
         const name = e.target.name
         const value = e.target.value
         setCurrentUser({ ...currentUser, [name]: value })
+
+        // Reset join attempt when user changes room ID
+        if (name === 'roomId') {
+            setJoinAttemptedRoomId(null)
+        }
     }
 
     const handlePasswordChange = (e: ChangeEvent<HTMLInputElement>) => {
@@ -255,6 +264,9 @@ const FormComponent = () => {
         if (status === USER_STATUS.ATTEMPTING_JOIN || status === USER_STATUS.JOINED) return
         if (!validateForm()) return
 
+        // Track which room user is trying to join
+        setJoinAttemptedRoomId(currentUser.roomId)
+
         // Save credentials if remember me is checked
         if (rememberMe) {
             saveCredentialsToCookies(cookieLifetime)
@@ -268,9 +280,38 @@ const FormComponent = () => {
         }
 
         // If room exists and has password, show password modal
-        if (roomInfo && roomInfo.has_password && !isCreatingRoom) {
-            setShowPasswordModal(true)
-            return
+        if (roomInfo) {
+
+            // Deleted room
+            if (roomInfo.is_delete && roomInfo.owner_name !== currentUser.username) {
+                toast.error("Room has been deleted")
+                return
+            }
+
+            // Inactive room
+            if (!roomInfo.is_active && roomInfo.owner_name !== currentUser.username) {
+                toast.error("Room is inactive")
+                return
+            }
+
+            // If banned, backend already handles, but prevent modal
+            if (status === USER_STATUS.BANNED) {
+                toast.error("You are banned from this room")
+                return
+            }
+
+            // Password protected logic
+            if (roomInfo.has_password && !isCreatingRoom) {
+                // If user is already active in this room, skip password modal
+                if (roomInfo.owner_name === currentUser.username) {
+                    proceedWithJoin()
+                    return
+                }
+
+                // Show password modal only for first-time join
+                setShowPasswordModal(true)
+                return
+            }
         }
 
         // If creating new room or room doesn't require password, proceed
@@ -325,13 +366,40 @@ const FormComponent = () => {
         const handleError = (data: { message: string }) => {
             setIsCheckingRoom(false)
             toast.dismiss()
+
             if (data.message === "Room not found") {
                 setRoomInfo(null)
-                // If room not found and user entered a room ID, assume they want to create it
                 if (currentUser.roomId.trim().length >= 5) {
                     setIsCreatingRoom(true)
                 }
+            } else if (data.message.includes("deleted") || data.message.includes("inactive")) {
+                // Check if current user might be the owner
+                const mightBeOwner = roomInfo && roomInfo.owner_name === currentUser.username;
+
+                if (mightBeOwner) {
+                    // Owner can still join - show special message
+                    toast.loading("Reactivating room as owner...");
+                    // Retry join after a short delay
+                    setTimeout(() => {
+                        proceedWithJoin();
+                    }, 1000);
+                } else {
+                    // Non-owner users see the error
+                    setStatus(USER_STATUS.DISCONNECTED)
+                    setRoomInfo(null)
+                    setIsCreatingRoom(false)
+                    setJoinAttemptedRoomId(null)
+                    toast.error(data.message)
+                }
+            } else if (data.message.includes("banned")) {
+                // User is banned - allow them to try another room
+                setStatus(USER_STATUS.DISCONNECTED)
+                setJoinAttemptedRoomId(null)
+                toast.error(data.message)
             } else {
+                // Other errors - allow retry
+                setStatus(USER_STATUS.DISCONNECTED)
+                setJoinAttemptedRoomId(null)
                 toast.error(data.message)
             }
         }
@@ -342,6 +410,7 @@ const FormComponent = () => {
             toast.success("Successfully joined room!")
             setVerifiedPassword("")
             setRoomPassword("")
+            setJoinAttemptedRoomId(null)
             // Use join data if needed
             console.log('Joined room:', data)
         }
@@ -351,6 +420,7 @@ const FormComponent = () => {
             toast.dismiss()
             toast.error("Username already exists in this room")
             setIsAutoLoginAttempted(false) // Reset auto-login attempt
+            setJoinAttemptedRoomId(null)
         }
 
         const handleRoomCreated = (data: any) => {
@@ -358,8 +428,17 @@ const FormComponent = () => {
             toast.dismiss()
             toast.success("Room created successfully!")
             setRoomPassword("")
+            setJoinAttemptedRoomId(null)
             // Use room data if needed
             console.log('Room created:', data)
+        }
+
+        const handleJoinPending = (data: { roomId: string; message: string }) => {
+            setStatus(USER_STATUS.DISCONNECTED)
+            toast.dismiss()
+            toast.loading(data.message, { duration: 5000 })
+            setJoinAttemptedRoomId(null)
+            // User can try another room while waiting for approval
         }
 
         socket.on(SocketEvent.ROOM_INFO_RESPONSE, handleRoomInfoResponse)
@@ -370,6 +449,7 @@ const FormComponent = () => {
         socket.on(SocketEvent.JOIN_ACCEPTED, handleJoinAccepted)
         socket.on(SocketEvent.USERNAME_EXISTS, handleUsernameExists)
         socket.on(SocketEvent.ROOM_CREATED, handleRoomCreated)
+        socket.on(SocketEvent.JOIN_PENDING, handleJoinPending)
 
         return () => {
             socket.off(SocketEvent.ROOM_INFO_RESPONSE, handleRoomInfoResponse)
@@ -380,6 +460,7 @@ const FormComponent = () => {
             socket.off(SocketEvent.JOIN_ACCEPTED, handleJoinAccepted)
             socket.off(SocketEvent.USERNAME_EXISTS, handleUsernameExists)
             socket.off(SocketEvent.ROOM_CREATED, handleRoomCreated)
+            socket.off(SocketEvent.JOIN_PENDING, handleJoinPending)
         }
     }, [socket, currentUser.roomId, roomPassword])
 
@@ -435,6 +516,9 @@ const FormComponent = () => {
         }
     }
 
+    // Check if user is currently trying to join the same room that's showing in the form
+    const isJoiningCurrentRoom = joinAttemptedRoomId === currentUser.roomId && status === USER_STATUS.ATTEMPTING_JOIN
+
     return (
         <>
             <div className="flex w-full max-w-[500px] flex-col items-center justify-center gap-4 p-4 sm:w-[500px] sm:p-8">
@@ -459,13 +543,51 @@ const FormComponent = () => {
                                 Checking room...
                             </div>
                         ) : roomInfo ? (
-                            <div className="text-green-400">
-                                ✓ Room found: {roomInfo.room_name}
+                            <div className={roomInfo.is_delete || !roomInfo.is_active ? "text-red-400" : "text-green-400"}>
+                                {roomInfo.is_delete ? (
+                                    <>
+                                        ❌ Room has been deleted
+                                        {roomInfo.owner_name === currentUser.username && (
+                                            <div className="text-xs text-yellow-400 mt-1">
+                                                You are the owner - you can reactivate this room by joining
+                                            </div>
+                                        )}
+                                    </>
+                                ) : !roomInfo.is_active ? (
+                                    <>
+                                        ⏸️ Room is inactive
+                                        {roomInfo.owner_name === currentUser.username && (
+                                            <div className="text-xs text-yellow-400 mt-1">
+                                                You are the owner - you can reactivate this room by joining
+                                            </div>
+                                        )}
+                                    </>
+                                ) : (
+                                    <>
+                                        ✓ Room found: {roomInfo.room_name}
+                                        {roomInfo.has_password ? (
+                                            <div className="text-xs text-yellow-400 mt-1">
+                                                🔒 Password protected - approval required for first time
+                                            </div>
+                                        ) : (
+                                            <div className="text-xs text-green-400 mt-1">
+                                                🔓 No password - immediate access
+                                            </div>
+                                        )}
+                                    </>
+                                )}
                                 {roomInfo.owner_name && ` (Created by ${roomInfo.owner_name})`}
-                                {roomInfo.has_password && " (Password protected)"}
+                                {roomInfo.owner_name === currentUser.username && (
+                                    <div className="text-xs text-blue-400 mt-1">👑 You are the room owner</div>
+                                )}
                                 <div className="text-xs text-gray-400">
                                     {roomInfo.user_count} user(s) online
                                 </div>
+                                {(roomInfo.is_delete || !roomInfo.is_active) && roomInfo.owner_name !== currentUser.username && (
+                                    <div className="text-xs text-yellow-400 mt-1">
+                                        You can create a new room or join another one
+                                    </div>
+                                )}
                             </div>
                         ) : isCreatingRoom ? (
                             <div className="text-blue-400">
@@ -485,9 +607,10 @@ const FormComponent = () => {
                             type="text"
                             name="roomId"
                             placeholder="Room ID"
-                            className="w-full rounded-md border border-gray-500 bg-darkHover px-3 py-3 focus:outline-none"
+                            className="w-full rounded-md border border-gray-500 bg-darkHover px-3 py-3 focus:outline-none disabled:opacity-50"
                             onChange={handleInputChanges}
                             value={currentUser.roomId}
+                            disabled={status === USER_STATUS.JOINED}
                         />
                         {isCreatingRoom && (
                             <div className="absolute right-3 top-1/2 -translate-y-1/2">
@@ -500,10 +623,11 @@ const FormComponent = () => {
                         type="text"
                         name="username"
                         placeholder="Username"
-                        className="w-full rounded-md border border-gray-500 bg-darkHover px-3 py-3 focus:outline-none"
+                        className="w-full rounded-md border border-gray-500 bg-darkHover px-3 py-3 focus:outline-none disabled:opacity-50"
                         onChange={handleInputChanges}
                         value={currentUser.username}
                         ref={usernameRef}
+                        disabled={status === USER_STATUS.JOINED}
                     />
 
                     {/* Password input for new rooms */}
@@ -512,9 +636,10 @@ const FormComponent = () => {
                             <input
                                 type={showPassword ? "text" : "password"}
                                 placeholder="Room Password (optional)"
-                                className="w-full rounded-md border border-gray-500 bg-darkHover px-3 py-3 pr-10 focus:outline-none"
+                                className="w-full rounded-md border border-gray-500 bg-darkHover px-3 py-3 pr-10 focus:outline-none disabled:opacity-50"
                                 value={roomPassword}
                                 onChange={handlePasswordChange}
+                                disabled={status === USER_STATUS.JOINED}
                             />
                             <button
                                 type="button"
@@ -535,6 +660,7 @@ const FormComponent = () => {
                                 checked={rememberMe}
                                 onChange={handleRememberMeChange}
                                 className="h-4 w-4 rounded border-gray-500 bg-darkHover text-primary focus:ring-primary"
+                                disabled={status === USER_STATUS.JOINED}
                             />
                             <label htmlFor="rememberMe" className="text-sm text-gray-300">
                                 Remember me
@@ -555,7 +681,8 @@ const FormComponent = () => {
                                 <select
                                     value={cookieLifetime === undefined ? "session" : cookieLifetime.toString()}
                                     onChange={handleCookieLifetimeChange}
-                                    className="rounded-md border border-gray-500 bg-darkHover px-2 py-1 text-sm text-gray-300 focus:outline-none"
+                                    className="rounded-md border border-gray-500 bg-darkHover px-2 py-1 text-sm text-gray-300 focus:outline-none disabled:opacity-50"
+                                    disabled={status === USER_STATUS.JOINED}
                                 >
                                     <option value="session">This session only</option>
                                     <option value="1">1 day</option>
@@ -570,9 +697,9 @@ const FormComponent = () => {
                     <button
                         type="submit"
                         className="mt-2 flex items-center justify-center gap-2 w-full rounded-md bg-primary px-8 py-3 text-lg font-semibold text-black disabled:opacity-50"
-                        disabled={status === USER_STATUS.ATTEMPTING_JOIN || status === USER_STATUS.JOINED}
+                        disabled={isJoiningCurrentRoom || status === USER_STATUS.JOINED}
                     >
-                        {status === USER_STATUS.ATTEMPTING_JOIN ? (
+                        {isJoiningCurrentRoom ? (
                             <>
                                 <svg className="h-5 w-5 animate-spin" viewBox="0 0 24 24">
                                     <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
@@ -600,8 +727,9 @@ const FormComponent = () => {
 
                 <div className="flex w-full items-center justify-between">
                     <button
-                        className="flex items-center gap-2 cursor-pointer select-none underline"
+                        className="flex items-center gap-2 cursor-pointer select-none underline disabled:opacity-50"
                         onClick={createNewRoomId}
+                        disabled={status === USER_STATUS.JOINED}
                     >
                         <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
@@ -612,7 +740,7 @@ const FormComponent = () => {
                     {/* Clear saved credentials */}
                     {getCookie("rememberMe") === "true" && (
                         <button
-                            className="flex items-center gap-1 cursor-pointer select-none text-sm text-red-400 underline"
+                            className="flex items-center gap-1 cursor-pointer select-none text-sm text-red-400 underline disabled:opacity-50"
                             onClick={() => {
                                 deleteCookie("savedUsername")
                                 deleteCookie("savedRoomId")
@@ -621,8 +749,10 @@ const FormComponent = () => {
                                 setRememberMe(false)
                                 setCurrentUser({ ...currentUser, username: "", roomId: "" })
                                 setIsAutoLoginAttempted(false)
+                                setJoinAttemptedRoomId(null)
                                 toast.success("Saved credentials cleared")
                             }}
+                            disabled={status === USER_STATUS.JOINED}
                         >
                             <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
@@ -681,6 +811,7 @@ const FormComponent = () => {
                                     setShowPasswordModal(false)
                                     setRoomPassword("")
                                     setVerifiedPassword("")
+                                    setJoinAttemptedRoomId(null)
                                 }}
                                 className="flex items-center justify-center gap-2 flex-1 rounded-md border border-gray-500 px-4 py-2 font-semibold"
                             >

@@ -17,7 +17,14 @@ interface RemoteUser extends User {
     selectionStart?: number
     selectionEnd?: number
     photo?: string
+    is_active?: number | boolean
+    is_banned?: number | boolean
+    isActive?: number | boolean
+    banned?: boolean
+    user_status?: string
+    isOwner?: boolean
 }
+
 
 enum USER_STATUS {
     INITIAL = "initial",
@@ -26,6 +33,7 @@ enum USER_STATUS {
     JOINED = "joined",
     CONNECTION_FAILED = "connection-failed",
     DISCONNECTED = "disconnected",
+    BANNED = 'banned'
 }
 
 export { USER_CONNECTION_STATUS, USER_STATUS, RemoteUser, User }
