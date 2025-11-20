@@ -58,6 +58,7 @@ const COOKIE_CONFIG = {
 interface RoomInfo {
     room_id: string;
     room_name: string;
+    owner_name?: string;
     has_password: boolean;
     created_at: string;
     user_count: number;
@@ -97,7 +98,7 @@ const FormComponent = () => {
                 roomId: savedRoomId
             })
             setRememberMe(true)
-            
+
             // Set the cookie lifetime based on saved value
             if (savedLifetime) {
                 const lifetime = savedLifetime === "session" ? undefined : parseInt(savedLifetime)
@@ -116,12 +117,12 @@ const FormComponent = () => {
         const savedRoomId = getCookie("savedRoomId");
         const savedRememberMe = getCookie("rememberMe") === "true";
 
-        if (savedRememberMe && savedUsername && savedRoomId && 
-            currentUser.username === savedUsername && 
+        if (savedRememberMe && savedUsername && savedRoomId &&
+            currentUser.username === savedUsername &&
             currentUser.roomId === savedRoomId &&
-            currentUser.username.trim().length >= 3 && 
+            currentUser.username.trim().length >= 3 &&
             currentUser.roomId.trim().length >= 5) {
-            
+
             setIsAutoLoginAttempted(true);
             // Small delay to ensure context is properly set
             setTimeout(() => {
@@ -152,7 +153,7 @@ const FormComponent = () => {
     const handleRememberMeChange = (e: ChangeEvent<HTMLInputElement>) => {
         const isChecked = e.target.checked
         setRememberMe(isChecked)
-        
+
         // If unchecking remember me, reset to default persistent lifetime
         if (!isChecked) {
             setCookieLifetime(COOKIE_CONFIG.PERSISTENT)
@@ -162,15 +163,15 @@ const FormComponent = () => {
     const handleCookieLifetimeChange = (e: ChangeEvent<HTMLSelectElement>) => {
         const value = e.target.value
         let lifetime: number | undefined
-        
+
         if (value === "session") {
             lifetime = undefined
         } else {
             lifetime = parseInt(value)
         }
-        
+
         setCookieLifetime(lifetime)
-        
+
         // Update cookies immediately if remember me is checked
         if (rememberMe && currentUser.username && currentUser.roomId) {
             saveCredentialsToCookies(lifetime)
@@ -244,7 +245,7 @@ const FormComponent = () => {
 
     const handleAutoJoin = () => {
         if (status === USER_STATUS.ATTEMPTING_JOIN || status === USER_STATUS.JOINED) return
-        
+
         console.log("Auto-joining room with saved credentials...")
         proceedWithJoin()
     }
@@ -418,7 +419,7 @@ const FormComponent = () => {
 
     const getCookieLifetimeText = () => {
         if (!rememberMe) return ""
-        
+
         if (cookieLifetime === undefined) {
             return " (Session)"
         } else if (cookieLifetime === 1) {
@@ -460,6 +461,7 @@ const FormComponent = () => {
                         ) : roomInfo ? (
                             <div className="text-green-400">
                                 ✓ Room found: {roomInfo.room_name}
+                                {roomInfo.owner_name && ` (Created by ${roomInfo.owner_name})`}
                                 {roomInfo.has_password && " (Password protected)"}
                                 <div className="text-xs text-gray-400">
                                     {roomInfo.user_count} user(s) online

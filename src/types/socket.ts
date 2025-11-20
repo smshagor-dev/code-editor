@@ -42,6 +42,12 @@ enum SocketEvent {
     LOAD_FILE_CONTENT = "load-file-content",
     LOAD_CHAT_HISTORY = 'load_chat_history',
     CHAT_HISTORY_LOADED = 'chat_history_loaded',
+
+    EDIT_ROOM_REQUEST = 'EDIT_ROOM_REQUEST',
+    EDIT_ROOM_RESPONSE = 'EDIT_ROOM_RESPONSE',
+    ROOM_OWNER_CHECK = 'ROOM_OWNER_CHECK',
+    ROOM_OWNER_RESPONSE = 'ROOM_OWNER_RESPONSE',
+    ROOM_UPDATED = 'ROOM_UPDATED',
     
 }
 
