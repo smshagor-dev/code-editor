@@ -3,46 +3,41 @@ import { useFileSystem } from "@/context/FileContext"
 import { useSocket } from "@/context/SocketContext"
 import useResponsive from "@/hooks/useResponsive"
 import { SocketEvent } from "@/types/socket"
-import { useState } from "react"
+import { useState, useRef, useEffect } from "react"
 import toast from "react-hot-toast"
-import { LuClipboardPaste, LuCopy, LuRepeat } from "react-icons/lu"
+import { LuClipboardPaste, LuCopy, LuRepeat, LuSend } from "react-icons/lu"
 import ReactMarkdown from "react-markdown"
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter"
 import { dracula } from "react-syntax-highlighter/dist/esm/styles/prism"
-import { askGemini } from "@/api/gemini"
-import { generateWithGPT as generateWithGPTAPI } from "@/api/chatgpt"
 import { generateWithDeepSeek as generateWithDeepSeekAPI } from "@/api/deepseek"
 
-type TabType = 'copilot' | 'gemini' | 'chatgpt' | 'deepseek'
+type TabType = 'deepseek' | 'copilot'
 
 function CopilotView() {
     const {socket} = useSocket()
     const { viewHeight } = useResponsive()
     const { generateCode, output, isRunning, input, setInput } = useCopilot() 
     const { activeFile, updateFileContent, setActiveFile } = useFileSystem()
-    const [activeTab, setActiveTab] = useState<TabType>('copilot')
-    
-    // Gemini state
-    const [geminiInput, setGeminiInput] = useState('')
-    const [geminiOutput, setGeminiOutput] = useState('')
-    const [isGeminiLoading, setIsGeminiLoading] = useState(false)
-    
-    // ChatGPT state
-    const [chatgptInput, setChatgptInput] = useState('')
-    const [chatgptOutput, setChatgptOutput] = useState('')
-    const [isChatgptLoading, setIsChatgptLoading] = useState(false)
+    const [activeTab, setActiveTab] = useState<TabType>('deepseek')
+    const textareaRef = useRef<HTMLTextAreaElement>(null)
     
     // DeepSeek state
     const [deepseekInput, setDeepseekInput] = useState('')
     const [deepseekOutput, setDeepseekOutput] = useState('')
     const [isDeepseekLoading, setIsDeepseekLoading] = useState(false)
 
-    // Get current tab state
+    // Helper functions declared before use
+    const getCurrentInput = () => {
+        switch (activeTab) {
+            case 'copilot': return input 
+            case 'deepseek': return deepseekInput
+            default: return ''
+        }
+    }
+
     const getCurrentOutput = () => {
         switch (activeTab) {
             case 'copilot': return output
-            case 'gemini': return geminiOutput
-            case 'chatgpt': return chatgptOutput
             case 'deepseek': return deepseekOutput
             default: return ''
         }
@@ -51,64 +46,43 @@ function CopilotView() {
     const getCurrentLoading = () => {
         switch (activeTab) {
             case 'copilot': return isRunning
-            case 'gemini': return isGeminiLoading
-            case 'chatgpt': return isChatgptLoading
             case 'deepseek': return isDeepseekLoading
             default: return false
         }
     }
 
-    const getCurrentInput = () => {
+    const getButtonText = () => {
+        const baseText = {
+            'copilot': 'Generate Code',
+            'deepseek': 'Generate with DeepSeek'
+        }[activeTab]
+
+        return getCurrentLoading() ? `Generating...` : baseText
+    }
+
+    const getButtonColor = () => {
         switch (activeTab) {
-            case 'copilot': return input 
-            case 'gemini': return geminiInput
-            case 'chatgpt': return chatgptInput
-            case 'deepseek': return deepseekInput
-            default: return ''
+            case 'copilot': return 'bg-primary'
+            case 'deepseek': return 'bg-purple-600'
+            default: return 'bg-primary'
         }
     }
 
-    // Gemini Functions
-    const generateWithGemini = async () => {
-        if (!geminiInput.trim()) {
-            toast.error("Please enter a prompt for Gemini")
-            return
-        }
-
-        setIsGeminiLoading(true)
-        try {
-            const response = await askGemini(geminiInput)
-            setGeminiOutput(response)
-            toast.success("Gemini response generated!")
-        } catch (error) {
-            console.error("Error generating with Gemini:", error)
-            toast.error("Failed to generate code with Gemini")
-            setGeminiOutput("Error: Unable to generate code. Please try again.")
-        } finally {
-            setIsGeminiLoading(false)
+    const getPlaceholderText = () => {
+        switch (activeTab) {
+            case 'copilot': return "What code do you want to generate? (Press Enter to send)"
+            case 'deepseek': return "Ask DeepSeek to generate code... (Press Enter to send)"
+            default: return "Enter your prompt..."
         }
     }
 
-    // ChatGPT Functions
-    const generateWithChatGPT = async () => {
-        if (!chatgptInput.trim()) {
-            toast.error("Please enter a prompt for ChatGPT")
-            return
+    // Auto-resize textarea
+    useEffect(() => {
+        if (textareaRef.current) {
+            textareaRef.current.style.height = 'auto'
+            textareaRef.current.style.height = textareaRef.current.scrollHeight + 'px'
         }
-
-        setIsChatgptLoading(true)
-        try {
-            const response = await generateWithGPTAPI(chatgptInput)
-            setChatgptOutput(response)
-            toast.success("ChatGPT response generated!")
-        } catch (error) {
-            console.error("Error generating with ChatGPT:", error)
-            toast.error("Failed to generate code with ChatGPT")
-            setChatgptOutput("Error: Unable to generate code. Please try again.")
-        } finally {
-            setIsChatgptLoading(false)
-        }
-    }
+    }, [getCurrentInput()])
 
     // DeepSeek Functions
     const generateWithDeepSeek = async () => {
@@ -121,21 +95,36 @@ function CopilotView() {
         try {
             const response = await generateWithDeepSeekAPI(deepseekInput)
             setDeepseekOutput(response)
+            setDeepseekInput('') // Clear input after send
             toast.success("DeepSeek response generated!")
-        } catch (error) {
+        } catch (error: any) {
             console.error("Error generating with DeepSeek:", error)
-            toast.error("Failed to generate code with DeepSeek")
-            setDeepseekOutput("Error: Unable to generate code. Please try again.")
+            
+            if (error?.message?.includes('region') || error?.response?.status === 403) {
+                toast.error("DeepSeek API is not available in your region")
+                setDeepseekOutput("Error: DeepSeek API is not available in your region. Please try using a different service or check your region restrictions.")
+            } else {
+                toast.error("Failed to generate code with DeepSeek")
+                setDeepseekOutput("Error: Unable to generate code. Please try again.")
+            }
         } finally {
             setIsDeepseekLoading(false)
         }
     }
 
+    // Copilot function with input clearing
+    const handleCopilotGenerate = () => {
+        if (!input.trim()) {
+            toast.error("Please enter a prompt for Copilot")
+            return
+        }
+        generateCode()
+        setInput('') // Clear input after send
+    }
+
     const handleGenerate = () => {
         switch (activeTab) {
-            case 'copilot': generateCode(); break
-            case 'gemini': generateWithGemini(); break
-            case 'chatgpt': generateWithChatGPT(); break
+            case 'copilot': handleCopilotGenerate(); break
             case 'deepseek': generateWithDeepSeek(); break
         }
     }
@@ -143,9 +132,17 @@ function CopilotView() {
     const handleInputChange = (value: string) => {
         switch (activeTab) {
             case 'copilot': setInput(value); break
-            case 'gemini': setGeminiInput(value); break
-            case 'chatgpt': setChatgptInput(value); break
             case 'deepseek': setDeepseekInput(value); break
+        }
+    }
+
+    const handleKeyPress = (e: React.KeyboardEvent) => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault()
+            const currentInput = getCurrentInput()
+            if (!getCurrentLoading() && currentInput.trim()) {
+                handleGenerate()
+            }
         }
     }
 
@@ -199,36 +196,22 @@ function CopilotView() {
         })
     }
 
-    const getButtonText = () => {
-        const baseText = {
-            'copilot': 'Generate Code',
-            'gemini': 'Generate with Gemini',
-            'chatgpt': 'Generate with ChatGPT',
-            'deepseek': 'Generate with DeepSeek'
-        }[activeTab]
+    // SVG Icons for tabs - Actual logos
+    const DeepSeekIcon = () => (
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" className="inline mr-2">
+            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8z"/>
+            <path d="M12 8l-4 4 4 4 4-4-4-4zm0 6l-2-2 2-2 2 2-2 2z"/>
+        </svg>
+    )
 
-        return getCurrentLoading() ? `Generating...` : baseText
-    }
-
-    const getButtonColor = () => {
-        switch (activeTab) {
-            case 'copilot': return 'bg-primary'
-            case 'gemini': return 'bg-blue-600'
-            case 'chatgpt': return 'bg-green-600'
-            case 'deepseek': return 'bg-purple-600'
-            default: return 'bg-primary'
-        }
-    }
-
-    const getPlaceholderText = () => {
-        switch (activeTab) {
-            case 'copilot': return "What code do you want to generate?"
-            case 'gemini': return "Ask Gemini to generate code..."
-            case 'chatgpt': return "Ask ChatGPT to generate code..."
-            case 'deepseek': return "Ask DeepSeek to generate code..."
-            default: return "Enter your prompt..."
-        }
-    }
+    const CopilotIcon = () => (
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" className="inline mr-2">
+            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8z"/>
+            <circle cx="9" cy="9" r="1.5"/>
+            <circle cx="15" cy="9" r="1.5"/>
+            <path d="M8 16h8v1.5H8z"/>
+        </svg>
+    )
 
     return (
         <div
@@ -237,104 +220,117 @@ function CopilotView() {
         >
             <h1 className="view-title">AI Assistant</h1>
             
-            {/* Tab Navigation */}
-            <div className="flex border-b border-gray-600 gap-1">
-                {(['copilot', 'gemini', 'chatgpt', 'deepseek'] as TabType[]).map((tab) => (
+            {/* 3D Tab Navigation */}
+            <div className="flex border-b border-gray-600 gap-2 relative">
+                <div className="absolute bottom-0 left-0 w-full h-[2px] bg-gray-700 z-0"></div>
+                {(['deepseek', 'copilot'] as TabType[]).map((tab) => (
                     <button
                         key={tab}
-                        className={`px-4 py-2 font-medium transition-colors rounded-t-md capitalize ${
-                            activeTab === tab 
-                                ? `border-b-2 ${
-                                    tab === 'copilot' ? 'border-primary text-primary' :
-                                    tab === 'gemini' ? 'border-blue-500 text-blue-500' :
-                                    tab === 'chatgpt' ? 'border-green-500 text-green-500' :
-                                    'border-purple-500 text-purple-500'
-                                }` 
-                                : 'text-gray-400 hover:text-white'
-                        }`}
+                        className={`px-6 py-3 font-medium transition-all duration-300 capitalize flex items-center relative z-10
+                            ${activeTab === tab 
+                                ? `transform translate-y-0 
+                                   ${tab === 'copilot' 
+                                       ? 'bg-primary text-white shadow-lg border-t-2 border-l-2 border-r-2 border-primary rounded-t-lg' 
+                                       : 'bg-purple-600 text-white shadow-lg border-t-2 border-l-2 border-r-2 border-purple-500 rounded-t-lg'
+                                   }` 
+                                : 'text-gray-400 hover:text-white bg-gray-800 hover:bg-gray-700 rounded-t-lg border-t border-l border-r border-gray-600 transform translate-y-1 shadow-md'
+                            }`}
                         onClick={() => setActiveTab(tab)}
                     >
-                        {tab === 'chatgpt' ? 'ChatGPT' : 
-                         tab === 'deepseek' ? 'DeepSeek' : 
-                         tab.charAt(0).toUpperCase() + tab.slice(1)}
+                        {tab === 'copilot' ? <CopilotIcon /> : <DeepSeekIcon />}
+                        {tab === 'deepseek' ? 'DeepSeek' : 'Copilot'}
                     </button>
                 ))}
             </div>
 
-            {/* Input Area */}
-            <textarea
-                className="min-h-[120px] w-full rounded-md border-none bg-darkHover p-2 text-white outline-none"
-                placeholder={getPlaceholderText()}
-                value={getCurrentInput()}
-                onChange={(e) => handleInputChange(e.target.value)}
-            />
+            {/* Larger Input Area */}
+            <div className="relative">
+                <textarea
+                    ref={textareaRef}
+                    className="min-h-[150px] max-h-[300px] w-full rounded-lg border-2 border-gray-600 bg-darkHover p-4 text-white outline-none pr-12 resize-none text-lg leading-relaxed focus:border-primary transition-colors"
+                    placeholder={getPlaceholderText()}
+                    value={getCurrentInput()}
+                    onChange={(e) => handleInputChange(e.target.value)}
+                    onKeyPress={handleKeyPress}
+                    rows={4}
+                />
+                <button
+                    className={`absolute right-3 bottom-3 p-2 rounded-lg text-white disabled:opacity-50 shadow-lg hover:scale-105 transition-transform ${getButtonColor()}`}
+                    onClick={handleGenerate}
+                    disabled={getCurrentLoading() || !getCurrentInput().trim()}
+                >
+                    <LuSend size={20} />
+                </button>
+            </div>
             
             <button
-                className={`mt-1 flex w-full justify-center rounded-md p-2 font-bold text-white outline-none disabled:cursor-not-allowed disabled:opacity-50 ${getButtonColor()}`}
+                className={`flex w-full justify-center rounded-lg p-3 font-bold text-white outline-none disabled:cursor-not-allowed disabled:opacity-50 shadow-lg hover:shadow-xl transition-all ${getButtonColor()}`}
                 onClick={handleGenerate}
-                disabled={getCurrentLoading()}
+                disabled={getCurrentLoading() || !getCurrentInput().trim()}
             >
                 {getButtonText()}
             </button>
 
-            {/* Output Actions */}
-            {getCurrentOutput() && (
-                <div className="flex justify-end gap-4 pt-2">
-                    <button 
-                        title="Copy Output" 
-                        onClick={copyOutput}
-                        className="p-1 rounded hover:bg-darkHover transition-colors"
-                    >
-                        <LuCopy size={18} className="text-white" />
-                    </button>
-                    <button
-                        title="Replace code in file"
-                        onClick={replaceCodeInFile}
-                        className="p-1 rounded hover:bg-darkHover transition-colors"
-                    >
-                        <LuRepeat size={18} className="text-white" />
-                    </button>
-                    <button
-                        title="Paste code in file"
-                        onClick={pasteCodeInFile}
-                        className="p-1 rounded hover:bg-darkHover transition-colors"
-                    >
-                        <LuClipboardPaste size={18} className="text-white" />
-                    </button>
-                </div>
-            )}
-
             {/* Output Display */}
-            <div className="h-full rounded-lg w-full overflow-y-auto p-0">
-                <ReactMarkdown
-                    components={{
-                        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                        code({ inline, className, children, ...props }: any) {
-                            const match = /language-(\w+)/.exec(className || "")
-                            const language = match ? match[1] : "javascript"
+            <div className="h-full rounded-lg w-full overflow-y-auto p-0 border-2 border-gray-600 bg-gray-900">
+                {/* Output Actions */}
+                {getCurrentOutput() && (
+                    <div className="flex justify-end gap-4 p-3 bg-gray-800 rounded-t-lg">
+                        <button 
+                            title="Copy Output" 
+                            onClick={copyOutput}
+                            className="p-2 rounded-lg hover:bg-gray-700 transition-colors bg-gray-600 hover:scale-105 transform"
+                        >
+                            <LuCopy size={18} className="text-white" />
+                        </button>
+                        <button
+                            title="Replace code in file"
+                            onClick={replaceCodeInFile}
+                            className="p-2 rounded-lg hover:bg-gray-700 transition-colors bg-gray-600 hover:scale-105 transform"
+                        >
+                            <LuRepeat size={18} className="text-white" />
+                        </button>
+                        <button
+                            title="Paste code in file"
+                            onClick={pasteCodeInFile}
+                            className="p-2 rounded-lg hover:bg-gray-700 transition-colors bg-gray-600 hover:scale-105 transform"
+                        >
+                            <LuClipboardPaste size={18} className="text-white" />
+                        </button>
+                    </div>
+                )}
 
-                            return !inline ? (
-                                <SyntaxHighlighter
-                                    style={dracula}
-                                    language={language}
-                                    PreTag="pre"
-                                    className="!m-0 !h-full !rounded-lg !bg-gray-900 !p-2"
-                                >
-                                    {String(children).replace(/\n$/, "")}
-                                </SyntaxHighlighter>
-                            ) : (
-                                <code className={className} {...props}>
-                                    {children}
-                                </code>
-                            )
-                        },
-                        pre({ children }) {
-                            return <pre className="h-full">{children}</pre>
-                        },
-                    }}
-                >
-                    {getCurrentLoading() ? "Generating code..." : getCurrentOutput() || "Your generated code will appear here..."}
-                </ReactMarkdown>
+                <div className="p-4">
+                    <ReactMarkdown
+                        components={{
+                            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                            code({ inline, className, children, ...props }: any) {
+                                const match = /language-(\w+)/.exec(className || "")
+                                const language = match ? match[1] : "javascript"
+
+                                return !inline ? (
+                                    <SyntaxHighlighter
+                                        style={dracula}
+                                        language={language}
+                                        PreTag="pre"
+                                        className="!m-0 !rounded-lg !bg-gray-800 !p-4 !border !border-gray-600"
+                                    >
+                                        {String(children).replace(/\n$/, "")}
+                                    </SyntaxHighlighter>
+                                ) : (
+                                    <code className={`${className} bg-gray-800 px-2 py-1 rounded border border-gray-600`} {...props}>
+                                        {children}
+                                    </code>
+                                )
+                            },
+                            pre({ children }) {
+                                return <pre className="rounded-lg border border-gray-600 overflow-hidden">{children}</pre>
+                            },
+                        }}
+                    >
+                        {getCurrentLoading() ? "🔄 Generating code..." : getCurrentOutput() || "💡 Your generated code will appear here..."}
+                    </ReactMarkdown>
+                </div>
             </div>
         </div>
     )
